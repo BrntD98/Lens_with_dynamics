@@ -6,9 +6,10 @@ from scipy.integrate import solve_ivp
 
 T_YEARS = 20.  #год
 V_0 = 25. # а.е./год, скорость аппарата в инерц системе
-DT = 0.1 #Шаг интегрирования 
-t0 = 0.
-z0 = 550. # расстояние от КА до Солнца  (FCS) , а.е.
+DT = 0.05 # Шаг для t_span
+t0_data = datetime(2030, 9, 1, 0, 0)
+z = 550. # a.e. 
+z0 = 10. * 63241.1  # расстояние от КА до Солнца  (FCS) , а.е.
 
 # Орбитальные параметры экзопланеты
 Orb_param_exo_array = np.array([
@@ -42,19 +43,22 @@ dynamics = Dynamics_SGLF(
     M_sun=M_sun,
     M_JSUN_array=M_JSUN_array,
     Orb_param_JSUN_array=Orb_param_JSUN_array,
-    t0=t0,
-    z0=z0
-)
+    t0=t0_data,
+    z0=z0)
 
 def Dynamics(dynamics, t):
     """
     Вычисляет матрицы преобразования и ускорение Солнца.
     """
+    r_sun = dynamics.Sun_position_SSB(t = 0.)
+    #dn_bc_dt = dynamics.d_n0_dt(t = 0.)[2]
+    # print(dn_bc_dt /(24.* 3600.* 365.25))
+    # exit()
     dr_sun_dt, d2r_sun_dt = dynamics.r_sun_deriv(t)
-    S = dynamics.basis_FCS(t)[0]
+    S, a_vec= dynamics.basis_FCS(t)
     dS_dt, d2S_dt = dynamics.dS_dt(t)
-    a_vec = dynamics.basis_FCS(t)[1]
     return S, dS_dt, d2S_dt, dr_sun_dt, d2r_sun_dt, a_vec
+
 
 def dX_dt(t, X, dynamics):
     """
@@ -63,10 +67,14 @@ def dX_dt(t, X, dynamics):
     p_FCS = X[:3]  # Позиция в SSB 
     dpdt_FCS = X[3:]  # Скорость в SSB
     S, dS_dt, d2S_dt, dr_sun_dt_SSB, d2r_sun_dt_SSB, a_vec = Dynamics(dynamics, t)
-    D = (d2S_dt @ p_FCS) + 2 * (dS_dt @ dpdt_FCS)
-    d2pdt2_FCS = - S.T @ d2r_sun_dt_SSB - S.T @ D
-    return np.concatenate((dpdt_FCS, d2pdt2_FCS), axis=0)  
+    
+    # print(np.linalg.norm(d2r_sun_dt_SSB) * 1.495978707e-4)
+    # exit()
+    
 
+    D = (d2S_dt @ p_FCS) + 2 * (dS_dt @ dpdt_FCS)
+    d2pdt2_FCS = -S.T @ d2r_sun_dt_SSB - S.T @ D
+    return np.concatenate((dpdt_FCS, d2pdt2_FCS), axis=0)  
 
 def simulate_motion(dynamics, T_YEARS, V_0, DT):
     """
@@ -74,25 +82,31 @@ def simulate_motion(dynamics, T_YEARS, V_0, DT):
     """
     t0 = 0.
     S, dS_dt, d2S_dt, dRdt_SSB_0, d2Rd2t_SSB_0, a_vec = Dynamics(dynamics, t0)
+   
     times = np.arange(0., T_YEARS, DT)
     # Начальные условия в системе FCS
-    p0_FCS = np.array([0.0, 0.0, z0])  
+    p0_FCS = np.array([0.0, 0.0, z])  
     drdt_SSB_0 = V_0 * S[:, 2]
+    # dpdt_FCS_0 = np.array([9.28440694e-03, -1.97110936e-02,  1.18511898e+02]) / 4740.57 *1000. 
     dpdt_FCS_0 = S.T @ (drdt_SSB_0 - dRdt_SSB_0 - dS_dt @ p0_FCS)
     X0 = np.concatenate((p0_FCS, dpdt_FCS_0))
-    print(dS_dt @ S.T + S @ dS_dt.T)
+    # print(X0[3:])
+    # exit()
+    #print(dS_dt @ S.T + S @ dS_dt.T)
     #exit()
     # Запуск RK45
     sol = solve_ivp(lambda t, X: dX_dt(t, X, dynamics), [0., T_YEARS], X0, t_eval=times, method='RK45', atol=1e-9, rtol=1e-6)
     #print("Размерность решения:", sol.y.shape)
-    return sol.y[:2].T  # Только XY координаты FCS
+    return sol.y[:2].T # Только XY координаты FCS
 
-positions = simulate_motion(dynamics, T_YEARS, V_0, DT) 
+positions = 1.496 * 1e8 * simulate_motion(dynamics, T_YEARS, V_0, DT) 
 plt.figure(figsize=(8, 8))
-plt.plot(positions[:, 0], positions[:, 1], 'o-', label='Траектория аппарата')
-plt.plot(positions[0, 0], positions[0, 1], 'o', color='red', label='Начальная точка')
-plt.xlabel('X (а. е.)')
-plt.ylabel('Y (а. е.)')
+plt.plot( positions[:, 0] ,  positions[:, 1] , 'o-', label='Траектория аппарата')
+plt.plot(positions[0, 0],  positions[0, 1], 'o', color='green', label='Начальная точка')
+plt.plot(positions[-1, 0],  positions[-1, 1], 'o', color='red', label='Конечная точка')
+plt.axis('equal')
+plt.xlabel('X (км)')
+plt.ylabel('Y (км)')
 plt.legend()
 plt.grid()
 plt.title('Свободное движение аппарата в FCS за 20 лет')

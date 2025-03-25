@@ -4,13 +4,14 @@ from scipy.optimize import fsolve
 from datetime import datetime, timedelta
 
 class Dynamics_SGLF():
-    def __init__(self, Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, z0):
+    def __init__(self, Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0,  z0):
         self.Orb_param_exo_array = Orb_param_exo_array # массив, содержащий орбитальные параметры экзопланеты(соотв. табл. 2) [а.е., год, -, град, град, град, дата]
         self.M_sun = M_sun # масса Солнца в кг
         self.M_JSUN_array = M_JSUN_array # массив, содержащий массы планет Солнечной системы в кг
         self.Orb_param_JSUN_array = Orb_param_JSUN_array # массив, содержащий орбитальные параметры [a, T, e, Ω, ω, i, t0] планет Солнечной системы([а.е., год, -, град, град, град, дата])
         self.t0 = t0 # начальное время (дата) 
         self.z0 = z0 # а. е.
+        self.t0_data = t0 # дата
 
     def kepler_problem(self, t, Orb_param):
         '''
@@ -40,12 +41,13 @@ class Dynamics_SGLF():
         i = Orb_param[5] * np.pi / 180 # наклонение
         t0_planet = Orb_param[6] # в дата 
         if isinstance(t0_planet, datetime):
-            t0_planet = (t0_planet - datetime(2000, 1, 1)).total_seconds()
-            t0_planet /= 3600. * 24. * 365
+            t0_planet = (t0_planet - self.t0).total_seconds()
+            t0_planet /= 3600. * 24. * 365.25
         if isinstance(t, datetime):
-            t = (t - datetime(2000, 1, 1)).total_seconds()
-            t /= 3600. * 24. * 365
+            t = (t - self.t0).total_seconds()
+            t /= 3600. * 24. * 365.25
 
+        # M = 2. * np.pi * ((t - t0_planet) / T - np.floor((t - t0_planet) / T))
         M = 2. * np.pi * ((t - t0_planet) % T) / T
         E = M + e* np.sin(M) + 0.5 * e**2 * np.sin(2*M) # e достаточно мал
 
@@ -91,8 +93,8 @@ class Dynamics_SGLF():
         '''
         Вычисляет направление на положение барицентра экзосистемы в SSB
         '''
-        phi = (90. + 50. * 1e-6 * (t-self.t0)) * np.pi / 180. # в радианах
-        psi = (0. +50. * 1e-6 * (t-self.t0)) * np.pi / 180. # в радианах
+        phi = (90. + 1.39 * 1e-8 * t ) * np.pi / 180. # в радианах
+        psi = (0. + 1.39 * 1e-8 *  t) * np.pi / 180. # в радианах
 
         n_bc = np.array([np.cos(psi)*np.cos(phi),
                          np.sin(psi)*np.cos(phi),
@@ -122,12 +124,13 @@ class Dynamics_SGLF():
         #delta = self.delta(r_p_bc, r_sun)
         n0 = self.focal_line_direction(t)
         g3 = n0 / np.linalg.norm(n0)
-        if g3[0] != 1:
-            a_vec =  np.array([1, 0, 0])
-        elif g3[1] != 1:
-            a_vec =  np.array([0, 1, 0])
-        else:
-            a_vec =  np.array([0, 0, 1])
+        # if g3[0] != 1:
+        #     a_vec =  np.array([1, 0, 0])
+        # elif g3[1] != 1:
+        #     a_vec =  np.array([0, 1, 0])
+        # else:
+        #     a_vec =  np.array([0, 0, 1])
+        a_vec = np.array([1., 0., 0.])
         buf = a_vec - np.dot(a_vec,g3) * g3
         g1 = buf / np.linalg.norm(buf)
         g2 = np.cross(g3, g1)
@@ -137,22 +140,23 @@ class Dynamics_SGLF():
     def r_derivative(self, t, Orb_param):
         '''
         Возвращает первую и вторую производные от радиус-вектора r, найденного с помощью 
-        решения уравнения Кеплера
+        решения уравнения Кеплера 
         '''
-        a = Orb_param[0] # большая полуось
-        T = Orb_param[1] # период
+        a = Orb_param[0] # большая полуось, ае
+        T = Orb_param[1] # период, год
         e = Orb_param[2] # эксцентриситет
         Omega = Orb_param[3] * np.pi / 180
         w = Orb_param[4] * np.pi / 180
         i = Orb_param[5] * np.pi / 180 # наклонение
-        t0_planet = Orb_param[6] # подается в годах
+        t0_planet = Orb_param[6] # подается дата
         if isinstance(t0_planet, datetime):
-            t0_planet = (t0_planet - datetime(2000, 1, 1)).total_seconds()
-            t0_planet /= 3600. * 24. * 365
+            t0_planet = (t0_planet - self.t0_data).total_seconds()
+            t0_planet /= 3600. * 24. * 365.25
         if isinstance(t, datetime):
-            t = (t - datetime(2000, 1, 1)).total_seconds()
-            t /= 3600. * 24. * 365
+            t = (t - self.t0_data).total_seconds()
+            t /= 3600. * 24. * 365.25
 
+        # M = 2. * np.pi * ((t - t0_planet) / T - np.floor((t - t0_planet) / T))
         delta_t = (t - t0_planet) % T
         M = 2. * np.pi * delta_t / T
         n = 2 * np.pi / T
@@ -174,17 +178,22 @@ class Dynamics_SGLF():
         return dr_dt, d2r_dt2
 
     def r_sun_deriv(self, t):
+        """
+        Вычисляет первую и вторую производные положения Солнца в инерц системе с учетом влияния планет-гигантов.
+        """
         dr_sun_dt = np.zeros(3)
         d2r_sun_dt = np.zeros(3)
         dR_JSUN_list_dt = []
         d2R_JSUN_list_dt = []
-        for i in range(self.Orb_param_JSUN_array.shape[0]):
+        for i in range(len(self.Orb_param_JSUN_array)):
             dR_planet_dt, d2R_planet_dt = self.r_derivative(t, self.Orb_param_JSUN_array[i])
             dR_JSUN_list_dt.append(dR_planet_dt)
             d2R_JSUN_list_dt.append(d2R_planet_dt)
+
         dR_JSUN_array = np.array(dR_JSUN_list_dt)
         d2R_JSUN_array = np.array(d2R_JSUN_list_dt)
-        for i in range(len(self.M_JSUN_array)):  # Перебираем массы планет
+
+        for i in range(len(self.M_JSUN_array)):  
             mi = self.M_JSUN_array[i]
             dr_sun_dt -= (mi / (mi + self.M_sun)) * dR_JSUN_array[i]
             d2r_sun_dt -= (mi / (mi + self.M_sun)) * d2R_JSUN_array[i]
@@ -210,13 +219,12 @@ class Dynamics_SGLF():
         r_p_bc = self.kepler_problem(t, self.Orb_param_exo_array)
         delta = self.delta(r_p_bc, r_sun)
         d_delta_dt, d2_delta_dt = self.d_delta_dt(t)
-        phi = (90. + 50. * 1e-6 * (t-self.t0)) * np.pi / 180. # в радианах
-        psi = (0. +50. * 1e-6 * (t-self.t0)) * np.pi / 180. # в радианах
-        dphi_dt = (50 * 1e-6) # в радианах
-        dpsi_dt = (50 * 1e-6) # в радианах
+        phi = (90. + 1.39 * 1e-8 * t ) * np.pi / 180. # в радианах
+        psi = (0. +1.39 * 1e-8 *  t ) * np.pi / 180. # в радианах
+        dphi_dt = 1.39* 1e-8 * np.pi / 180. # в радианах
+        dpsi_dt = 1.39* 1e-8 * np.pi / 180. # в радианах
         n_bc = self.barycenter_position_SSB(t)
-        dn_bc_dt = np.array([
-            -np.sin(psi) * dpsi_dt * np.cos(phi) - np.cos(psi) * np.sin(phi) * dphi_dt,
+        dn_bc_dt = np.array([-np.sin(psi) * dpsi_dt * np.cos(phi) - np.cos(psi) * np.sin(phi) * dphi_dt,
             np.cos(psi) * dpsi_dt * np.cos(phi) - np.sin(psi) * np.sin(phi) * dphi_dt,
             np.cos(phi) * dphi_dt])
 
@@ -233,19 +241,15 @@ class Dynamics_SGLF():
 
             np.sin(phi) * dphi_dt * dphi_dt])
 
-
         #delta_normal = delta - np.dot(n_bc, delta) * n_bc
         d_delta_normal_dt = d_delta_dt - np.dot(dn_bc_dt, delta) * n_bc - np.dot(n_bc, d_delta_dt) * n_bc - np.dot(n_bc, delta) * dn_bc_dt
         d2_delta_normal_dt = (d2_delta_dt 
-                    - np.dot(d2n_bc_dt, delta) * n_bc
-                    - np.dot(n_bc, d2_delta_dt) * n_bc
-                    - np.dot(n_bc, delta) * d2n_bc_dt
-                    - 2 * (
-                        np.dot(dn_bc_dt, d_delta_dt) * n_bc 
-                        + np.dot(dn_bc_dt, delta) * dn_bc_dt 
-                        + np.dot(n_bc, d_delta_dt) * dn_bc_dt
-                    )
-                )
+                - np.dot(n_bc, d2_delta_dt) * n_bc 
+                - np.dot(n_bc, delta) * d2n_bc_dt 
+                - np.dot(d2n_bc_dt, delta) * n_bc 
+                - 2 * np.dot(dn_bc_dt, d_delta_dt) * n_bc 
+                - 2 * np.dot(n_bc, d_delta_dt) * dn_bc_dt 
+                - 2 * np.dot(d2n_bc_dt, delta) * dn_bc_dt )
         
         dn0_dt = - dn_bc_dt - d_delta_normal_dt / self.z0
         d2n0_dt = - d2n_bc_dt - d2_delta_normal_dt / self.z0
@@ -288,7 +292,7 @@ class Dynamics_SGLF():
         dS_dt = np.array([d_g1_dt, d_g2_dt, d_g3_dt]).T
         d2S_dt = np.array([d2_g1_dt, d2_g2_dt, d2_g3_dt]).T
         return dS_dt, d2S_dt
-     
+    
 
 if __name__ == "__main__":
     M_sun = 1.989 * 1e30  # масса Солнца (кг)
@@ -299,10 +303,10 @@ if __name__ == "__main__":
         1.02413e26  # Нептун
     ])
     import matplotlib.pyplot as plt
-    t0 = 0.
-    z0 = 50.
-    T_years = 20.
-    DT = 1.
+    t0 = datetime(2030, 9 , 1)
+    z0 = 550.
+    T_years = 100.
+    DT = 0.5
     Orb_param_exo_array = np.array([
         1. ,  # большая полуось ()
         1. ,  # период обращения (годы)
@@ -318,17 +322,23 @@ if __name__ == "__main__":
         [30.07, 164.8 , 0.008678, 131.784, 276.336, 1.767957, datetime(2042, 9, 4)]
     ])
 
-
-
     times = np.arange(0., T_years, DT)
     Dynamics = Dynamics_SGLF(Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, z0)
+    
     r_sun_array = []
     r_sun_deriv = []
+    d2_rsun_array = []
+
     for t in times:
         r_sun = Dynamics.Sun_position_SSB(t)
         r_sun_array.append(r_sun)
         r_deriv = Dynamics.r_sun_deriv(t)[0]
         r_sun_deriv.append(r_deriv)
+        d2_r_sun = Dynamics.r_sun_deriv(t)[1]
+        d2_rsun_array.append(d2_r_sun)
+        r_p_bc = Dynamics.kepler_problem(t, Orb_param_exo_array)
+        print(np.linalg.norm(r_p_bc))
+        
 
     # # a T e W w i t0
     # buf = Dynamics.kepler_problem(0, np.array([1, 1, 0., 0., 0., 0., datetime(2042, 9, 4)]))
@@ -336,7 +346,8 @@ if __name__ == "__main__":
 
     r_sun_array = np.array(r_sun_array)
     r_sun_deriv = np.array(r_sun_deriv)
-
+    d2_rsun_array = np.array(d2_rsun_array)
+    #print(np.linalg.norm(d2_rsun_array))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -345,7 +356,7 @@ if __name__ == "__main__":
     ax1.plot(r_sun_array[0, 0], r_sun_array[0, 1], 'go')
     ax1.set_xlabel('X, а.е.')
     ax1.set_ylabel('Y, а.е.')
-    ax1.set_title('Траектория Солнца')
+    ax1.set_title('Траектория Солнца относительно барицентра Солнечной системы')
     ax1.grid(True)
     ax1.axis('equal')
 
@@ -356,6 +367,14 @@ if __name__ == "__main__":
     ax2.set_title('Скорость Солнца')
     ax2.grid(True)
     ax2.axis('equal')
+
+    # ax3.plot(d2_rsun_array[:, 0], d2_rsun_array[:, 1], 'b-')
+    # ax3.plot(d2_rsun_array[0, 0], d2_rsun_array[0, 1], 'go')
+    # ax3.set_xlabel('X, а.е. / год*год')
+    # ax3.set_ylabel('Y, а.е. / год*год')
+    # ax3.set_title('Ускорение Солнца')
+    # ax3.grid(True)
+    # ax3.axis('equal')
 
     plt.tight_layout()
     plt.show()
