@@ -4,14 +4,15 @@ from scipy.optimize import fsolve
 from datetime import datetime, timedelta
 
 class Dynamics_SGLF():
-    def __init__(self, Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0,  z0):
+    def __init__(self, Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, t0_data, z0):
         self.Orb_param_exo_array = Orb_param_exo_array # массив, содержащий орбитальные параметры экзопланеты(соотв. табл. 2) [а.е., год, -, град, град, град, дата]
         self.M_sun = M_sun # масса Солнца в кг
         self.M_JSUN_array = M_JSUN_array # массив, содержащий массы планет Солнечной системы в кг
         self.Orb_param_JSUN_array = Orb_param_JSUN_array # массив, содержащий орбитальные параметры [a, T, e, Ω, ω, i, t0] планет Солнечной системы([а.е., год, -, град, град, град, дата])
         self.t0 = t0 # начальное время (дата) 
         self.z0 = z0 # а. е.
-        self.t0_data = t0 # дата
+        self.t0_data = t0_data # дата
+
 
     def kepler_problem(self, t, Orb_param):
         '''
@@ -41,10 +42,10 @@ class Dynamics_SGLF():
         i = Orb_param[5] * np.pi / 180 # наклонение
         t0_planet = Orb_param[6] # в дата 
         if isinstance(t0_planet, datetime):
-            t0_planet = (t0_planet - self.t0).total_seconds()
+            t0_planet = (t0_planet - self.t0_data).total_seconds()
             t0_planet /= 3600. * 24. * 365.25
         if isinstance(t, datetime):
-            t = (t - self.t0).total_seconds()
+            t = (t - self.t0_data).total_seconds()
             t /= 3600. * 24. * 365.25
 
         # M = 2. * np.pi * ((t - t0_planet) / T - np.floor((t - t0_planet) / T))
@@ -93,6 +94,10 @@ class Dynamics_SGLF():
         '''
         Вычисляет направление на положение барицентра экзосистемы в SSB
         '''
+        if isinstance(t, datetime):
+            t = (t - self.t0_data).total_seconds()
+            t /= 3600. * 24. * 365.25
+
         phi = (90. + 1.39 * 1e-8 * t ) * np.pi / 180. # в радианах
         psi = (0. + 1.39 * 1e-8 *  t) * np.pi / 180. # в радианах
 
@@ -215,6 +220,9 @@ class Dynamics_SGLF():
         '''
         Функция для вычисления производной n0 (вектора направления фокальной линии)
         '''
+        if isinstance(t, datetime):
+            t = (t - self.t0_data).total_seconds()
+            t /= 3600. * 24. * 365.25
         r_sun = self.Sun_position_SSB(t)
         r_p_bc = self.kepler_problem(t, self.Orb_param_exo_array)
         delta = self.delta(r_p_bc, r_sun)

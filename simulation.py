@@ -10,7 +10,7 @@ DT = 0.05 # Шаг для t_span
 t0_data = datetime(2030, 9, 1, 0, 0)
 z = 550. # a.e. 
 z0 = 10. * 63241.1  # расстояние от КА до Солнца  (FCS) , а.е.
-
+t0 = 0.
 # Орбитальные параметры экзопланеты
 Orb_param_exo_array = np.array([
     1. ,  # большая полуось (а.е)
@@ -43,7 +43,8 @@ dynamics = Dynamics_SGLF(
     M_sun=M_sun,
     M_JSUN_array=M_JSUN_array,
     Orb_param_JSUN_array=Orb_param_JSUN_array,
-    t0=t0_data,
+    t0 = t0,
+    t0_data=t0_data,
     z0=z0)
 
 def Dynamics(dynamics, t):
@@ -57,6 +58,9 @@ def Dynamics(dynamics, t):
     dr_sun_dt, d2r_sun_dt = dynamics.r_sun_deriv(t)
     S, a_vec= dynamics.basis_FCS(t)
     dS_dt, d2S_dt = dynamics.dS_dt(t)
+    print(S)
+    print(dS_dt)
+    exit()
     return S, dS_dt, d2S_dt, dr_sun_dt, d2r_sun_dt, a_vec
 
 
