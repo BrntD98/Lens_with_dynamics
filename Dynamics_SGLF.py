@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from scipy.spatial.transform import Rotation as R, Slerp
 
 class Dynamics_SGLF():
-    def __init__(self, Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, t0_data, z0, time_grid):
+    _precomputed = None
+    def __init__(self, Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, t0_data, z0, T_YEARS, h_interp, time_grid, precomputed=None):
         self.Orb_param_exo_array = Orb_param_exo_array # массив, содержащий орбитальные параметры экзопланеты(соотв. табл. 2) [а.е., год, -, град, град, град, дата]
         self.M_sun = M_sun # масса Солнца в кг
         self.M_JSUN_array = M_JSUN_array # массив, содержащий массы планет Солнечной системы в кг
@@ -13,8 +14,19 @@ class Dynamics_SGLF():
         self.t0 = t0 # начальное время (дата) 
         self.z0 = z0 # а. е.
         self.t0_data = t0_data # дата
+        self.T_YEARS = T_YEARS # время симуляции (интегрирования), год
+        self.h_interp = h_interp # шаг интерполяции, год
         self.time_grid = time_grid
-        self.precomput = self.precompute()
+        #self.time_grid = np.arange(t0, T_YEARS + 2 * h_interp, h_interp) # равномерная сетка для интерполяции годы
+        # Если предвычисленные данные переданы, используем их
+        if precomputed is not None:
+            self.quat_array, self.omega_array, self.epsilon_array = precomputed
+        elif Dynamics_SGLF._precomputed is not None:
+            # Если уже есть предвычисленные данные в классе, используем их
+            self.quat_array, self.omega_array, self.epsilon_array = Dynamics_SGLF._precomputed
+        else:
+            # В противном случае вычисляем данные
+            self.precompute()  # вызываем precompute для вычисления данных
 
     def kepler_problem(self, t, Orb_param):
         '''
@@ -37,7 +49,7 @@ class Dynamics_SGLF():
         
         '''
         a = Orb_param[0] # большая полуось
-        T = Orb_param[1] # период
+        T = Orb_param[1] # период годы
         e = Orb_param[2] # эксцентриситет
         Omega = Orb_param[3] * np.pi / 180
         w = Orb_param[4] * np.pi / 180
@@ -305,160 +317,183 @@ class Dynamics_SGLF():
     
     def angular_velocity(self, t):
         '''
-        Вычисление угловой скорости вращения неинерц СК FCS относительно инерциальной
+        Вычисление угловой скорости вращения неинерц СК FCS относительно инерциальной в проекции на неинерциальные оси FCS
         '''
         S, _ = self.basis_FCS(t)
         dS, _ = self.dS_dt(t)
-        omega= 0.5 * (np.cross(S[:,0],dS[:,0]) + np.cross(S[:,1],dS[:,1]) + np.cross(S[:,2],dS[:,2]))
-        return omega
+        omega_SSB= 0.5 * (np.cross(S[:,0],dS[:,0]) + np.cross(S[:,1],dS[:,1]) + np.cross(S[:,2],dS[:,2]))
+        omega_FCS = omega_SSB @ S
+
+        return omega_FCS
     
     def angular_acceleration(self, t):
         '''
-        Вычисление углового ускорения вращения неинерц СК FCS относительно инерциальной
+        Вычисление углового ускорения вращения неинерц СК FCS относительно инерциальной в проекции на неинерциальные оси FCS
         '''
         S, _ = self.basis_FCS(t)
         _, d2S = self.dS_dt(t)
-        epsilon =  0.5 * (np.cross(S[:,0],d2S[:,0]) + np.cross(S[:,1],d2S[:,1]) + np.cross(S[:,2],d2S[:,2]))
-        return epsilon  
+        epsilon_SSB =  0.5 * (np.cross(S[:,0],d2S[:,0]) + np.cross(S[:,1],d2S[:,1]) + np.cross(S[:,2],d2S[:,2]))
+        epsilon_FCS = epsilon_SSB @ S
+        return epsilon_FCS  
     
+    def quat(self,t):
+        """
+        Вычисление кватерниона поворота неинерц системы FCS относительно инерц SSB
+        """
+        S, _ = self.basis_FCS(t)
+        quat = R.from_matrix(S).as_quat()  # список размера 4
+        return quat
+   
     def precompute(self):
-        '''
-        Метод для подготовки precomput
-        '''
-        precomput = {}
+        """
+        Метод для подготовки предвычисленных данных
+        """
+        if hasattr(self, '_already_precomputed') and self._already_precomputed:
+            return self.quat_array, self.omega_array, self.epsilon_array
+
+        quat_array = []
+        omega_array = []
+        epsilon_array = []
+
         for t in self.time_grid:
-            S, _ = self.basis_FCS(t)
-            quat = R.from_matrix(S).as_quat()
+            quat = self.quat(t)
+            quat_array.append(quat)
             omega = self.angular_velocity(t)
+            omega_array.append(omega)
             epsilon = self.angular_acceleration(t)
-            precomput[t] = {"quat": quat, "omega": omega, "epsilon": epsilon}
-        return precomput
-    
+            epsilon_array.append(epsilon)
+            print("precomputing...")
+
+        # Сохраняем как np.array
+        self.quat_array = np.array(quat_array)
+        self.omega_array = np.array(omega_array)
+        self.epsilon_array = np.array(epsilon_array)
+
+        self._already_precomputed = True
+
+        return self.quat_array, self.omega_array, self.epsilon_array
+        
     def get_dynamics(self, t):
         if isinstance(t, datetime):
-            t = (t - self.t0_data).total_seconds() / (3600. * 24. * 365.25)
+            t = (t - self.t0_data).total_seconds() / (3600. * 24. * 365.25)  # в годах
 
-        # # Защита от выхода за границы
-        # if t < self.time_grid[0] or t > self.time_grid[-1]:
-        #     raise ValueError(f"Время t={t} выходит за допустимые пределы [{self.time_grid[0]}, {self.time_grid[-1]}]")
+        # Защита от выхода за пределы временной сетки
+        t = min(max(t, self.time_grid[0]), self.time_grid[-1])  # Оставляем время в пределах сетки
 
-        # Проверка находится ли t точно на узле сетки
-        if np.isclose(t, self.time_grid).any():
-            t_exact = self.time_grid[np.isclose(t, self.time_grid)][0]
-            q = self.precomput[t_exact]["quat"]
-            omega = self.precomput[t_exact]["omega"]
-            epsilon = self.precomput[t_exact]["epsilon"]
-            return q, omega, epsilon
+        k = int(t // self.h_interp)
+        if k >= len(self.quat_array) - 1:  # проверка на выход за пределы
+            k = len(self.quat_array) - 2  # устанавливаем максимальный возможный индекс
+        t_k = self.h_interp * k
+
+        # Обновление tau
+        tau = (t - t_k) / self.h_interp
+
+        q_k = self.quat_array[k]
+        q_k1 = self.quat_array[k + 1]
+        omega_k = self.omega_array[k]
+        omega_k1 = self.omega_array[k + 1]
+        epsilon_k = self.epsilon_array[k]
+        epsilon_k1 = self.epsilon_array[k + 1]
 
         # Интерполяция
-        idx = np.searchsorted(self.time_grid, t) - 1
-        idx = max(0, min(idx, len(self.time_grid) - 2))
-        t_k, t_k1 = self.time_grid[idx], self.time_grid[idx + 1]
-        tau = (t - t_k) / (t_k1 - t_k)
+        rk = R.from_quat(q_k)
+        rk1 = R.from_quat(q_k1)
+        r_diff = rk.inv() * rk1
+        r_interp = rk * (r_diff ** tau)
+        q_interp = r_interp.as_quat()
 
-        q_k = R.from_quat([self.precomput[t_k]["quat"]])
-        q_k1 = R.from_quat([self.precomput[t_k1]["quat"]])
-
-        q_k_conj = q_k.inv()  # Находим сопряженные кватернионы
-        q_diff = q_k_conj * q_k1  # Вычисляем разницу
-        q_diff_tau = q_diff ** tau  # Возводим разницу в степень tau
-        q_interp = q_k * q_diff_tau  # Перемножаем исходный кватернион с результатом
-
-        # Интерполяция угловых скоростей omega и других параметров
-        omega_k = self.precomput[t_k]["omega"]
-        omega_k1 = self.precomput[t_k1]["omega"]
         omega_interp = omega_k + tau * (omega_k1 - omega_k)
-
-        epsilon_k = self.precomput[t_k]["epsilon"]
-        epsilon_k1 = self.precomput[t_k1]["epsilon"]
         epsilon_interp = epsilon_k + tau * (epsilon_k1 - epsilon_k)
 
-        return q_interp.as_quat(), omega_interp, epsilon_interp
+        return q_interp, omega_interp, epsilon_interp
 
 
-if __name__ == "__main__":
-    M_sun = 1.989 * 1e30  # масса Солнца (кг)
-    M_JSUN_array = np.array([
-        1.8982e27,  # Юпитер
-        5.6834e26,  # Сатурн
-        8.6810e25,  # Уран
-        1.02413e26  # Нептун
-    ])
-    import matplotlib.pyplot as plt
-    t0 = datetime(2030, 9 , 1)
-    z0 = 550.
-    T_years = 100.
-    DT = 0.5
-    t0_data = datetime(2030, 9, 1, 0, 0)
-    time_grid = np.arange(0., 100., 1.)  # в годах
-    Orb_param_exo_array = np.array([
-        1. ,  # большая полуось ()
-        1. ,  # период обращения (годы)
-        0.0167086,  # эксцентриситет
-        -240., 352.5, 37.5,  # аргументы орбиты
-        datetime(2021, 1, 2)  # начальное время
-    ])
-    # Орбитальные параметры планет-гигантов
-    Orb_param_JSUN_array = np.array([
-        [5.2044 , 11.862 , 0.0489, 100.464, 273.867, 1.303, datetime(2023, 1, 21)],
-        [9.5826 , 29.4571 , 0.0565, 113.665, 339.392, 2.485, datetime(2032, 11, 29)],
-        [19.2184 , 84.0205 , 0.046381, 74.006, 96.998857, 0.773, datetime(2050, 8, 19)],
-        [30.07, 164.8 , 0.008678, 131.784, 276.336, 1.767957, datetime(2042, 9, 4)]
-    ])
+# if __name__ == "__main__":
+#     M_sun = 1.989 * 1e30  # масса Солнца (кг)
+#     M_JSUN_array = np.array([
+#         1.8982e27,  # Юпитер
+#         5.6834e26,  # Сатурн
+#         8.6810e25,  # Уран
+#         1.02413e26  # Нептун
+#     ])
+#     import matplotlib.pyplot as plt
+#     t0 = datetime(2030, 9 , 1)
+#     z0 = 550.
+#     T_years = 100.
+#     DT = 0.5
+#     t0_data = datetime(2030, 9, 1, 0, 0)
+#     time_grid = np.arange(0., 100., 1.)  # в годах
+#     Orb_param_exo_array = np.array([
+#         1. ,  # большая полуось ()
+#         1. ,  # период обращения (годы)
+#         0.0167086,  # эксцентриситет
+#         -240., 352.5, 37.5,  # аргументы орбиты
+#         datetime(2021, 1, 2)  # начальное время
+#     ])
+#     # Орбитальные параметры планет-гигантов
+#     Orb_param_JSUN_array = np.array([
+#         [5.2044 , 11.862 , 0.0489, 100.464, 273.867, 1.303, datetime(2023, 1, 21)],
+#         [9.5826 , 29.4571 , 0.0565, 113.665, 339.392, 2.485, datetime(2032, 11, 29)],
+#         [19.2184 , 84.0205 , 0.046381, 74.006, 96.998857, 0.773, datetime(2050, 8, 19)],
+#         [30.07, 164.8 , 0.008678, 131.784, 276.336, 1.767957, datetime(2042, 9, 4)]
+#     ])
 
-    times = np.arange(0., T_years, DT)
-    Dynamics = Dynamics_SGLF(Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, t0_data, z0, time_grid)
+#     times = np.arange(0., T_years, DT)
+#     T_YEARS = 20.
+#     h_interp = 0.1
+#     Dynamics = Dynamics_SGLF(Orb_param_exo_array, M_sun, M_JSUN_array, Orb_param_JSUN_array, t0, t0_data, z0, T_YEARS, h_interp)
     
-    r_sun_array = []
-    r_sun_deriv = []
-    d2_rsun_array = []
+#     r_sun_array = []
+#     r_sun_deriv = []
+#     d2_rsun_array = []
 
-    for t in times:
-        r_sun = Dynamics.Sun_position_SSB(t)
-        r_sun_array.append(r_sun)
-        r_deriv = Dynamics.r_sun_deriv(t)[0]
-        r_sun_deriv.append(r_deriv)
-        d2_r_sun = Dynamics.r_sun_deriv(t)[1]
-        d2_rsun_array.append(d2_r_sun)
-        r_p_bc = Dynamics.kepler_problem(t, Orb_param_exo_array)
-        print(np.linalg.norm(r_p_bc))
+#     for t in times:
+#         r_sun = Dynamics.Sun_position_SSB(t)
+#         r_sun_array.append(r_sun)
+#         r_deriv = Dynamics.r_sun_deriv(t)[0]
+#         r_sun_deriv.append(r_deriv)
+#         d2_r_sun = Dynamics.r_sun_deriv(t)[1]
+#         d2_rsun_array.append(d2_r_sun)
+#         r_p_bc = Dynamics.kepler_problem(t, Orb_param_exo_array)
+#         #print(np.linalg.norm(r_p_bc))
         
 
-    # # a T e W w i t0
-    # buf = Dynamics.kepler_problem(0, np.array([1, 1, 0., 0., 0., 0., datetime(2042, 9, 4)]))
-    # print(buf)
+#     # # a T e W w i t0
+#     # buf = Dynamics.kepler_problem(0, np.array([1, 1, 0., 0., 0., 0., datetime(2042, 9, 4)]))
+#     # print(buf)
 
-    r_sun_array = np.array(r_sun_array)
-    r_sun_deriv = np.array(r_sun_deriv)
-    d2_rsun_array = np.array(d2_rsun_array)
-    #print(np.linalg.norm(d2_rsun_array))
+#     r_sun_array = np.array(r_sun_array)
+#     r_sun_deriv = np.array(r_sun_deriv)
+#     d2_rsun_array = np.array(d2_rsun_array)
+#     #print(np.linalg.norm(d2_rsun_array))
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+#     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Траектория
-    ax1.plot(r_sun_array[:, 0], r_sun_array[:, 1], 'b-')
-    ax1.plot(r_sun_array[0, 0], r_sun_array[0, 1], 'go')
-    ax1.set_xlabel('X, а.е.')
-    ax1.set_ylabel('Y, а.е.')
-    ax1.set_title('Траектория Солнца относительно барицентра Солнечной системы')
-    ax1.grid(True)
-    ax1.axis('equal')
+#     # Траектория
+#     ax1.plot(r_sun_array[:, 0], r_sun_array[:, 1], 'b-')
+#     ax1.plot(r_sun_array[0, 0], r_sun_array[0, 1], 'go')
+#     ax1.set_xlabel('X, а.е.')
+#     ax1.set_ylabel('Y, а.е.')
+#     ax1.set_title('Траектория Солнца относительно барицентра Солнечной системы')
+#     ax1.grid(True)
+#     ax1.axis('equal')
 
-    ax2.plot(r_sun_deriv[:, 0] * 4740.47 , r_sun_deriv[:, 1] * 4740.47 , 'b-')
-    ax2.plot(r_sun_deriv[0, 0] * 4740.47 , r_sun_deriv[0, 1] * 4740.47 , 'go')
-    ax2.set_xlabel('X, м/с')
-    ax2.set_ylabel('Y, м/с')
-    ax2.set_title('Скорость Солнца')
-    ax2.grid(True)
-    ax2.axis('equal')
+#     ax2.plot(r_sun_deriv[:, 0] * 4740.47 , r_sun_deriv[:, 1] * 4740.47 , 'b-')
+#     ax2.plot(r_sun_deriv[0, 0] * 4740.47 , r_sun_deriv[0, 1] * 4740.47 , 'go')
+#     ax2.set_xlabel('X, м/с')
+#     ax2.set_ylabel('Y, м/с')
+#     ax2.set_title('Скорость Солнца')
+#     ax2.grid(True)
+#     ax2.axis('equal')
 
-    # ax3.plot(d2_rsun_array[:, 0], d2_rsun_array[:, 1], 'b-')
-    # ax3.plot(d2_rsun_array[0, 0], d2_rsun_array[0, 1], 'go')
-    # ax3.set_xlabel('X, а.е. / год*год')
-    # ax3.set_ylabel('Y, а.е. / год*год')
-    # ax3.set_title('Ускорение Солнца')
-    # ax3.grid(True)
-    # ax3.axis('equal')
+#     # ax3.plot(d2_rsun_array[:, 0], d2_rsun_array[:, 1], 'b-')
+#     # ax3.plot(d2_rsun_array[0, 0], d2_rsun_array[0, 1], 'go')
+#     # ax3.set_xlabel('X, а.е. / год*год')
+#     # ax3.set_ylabel('Y, а.е. / год*год')
+#     # ax3.set_title('Ускорение Солнца')
+#     # ax3.grid(True)
+#     # ax3.axis('equal')
 
-    plt.tight_layout()
-    plt.show()
+#     plt.tight_layout()
+#     plt.show()
+

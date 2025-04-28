@@ -11,6 +11,8 @@ t0_data = datetime(2030, 9, 1, 0, 0)
 z = 550. # a.e. 
 z0 = 10. * 63241.1  # расстояние от КА до Солнца  (FCS) , а.е.
 t0 = 0.
+h_interp = 0.1
+time_grid = np.arange(0., T_YEARS+0.01, h_interp)  # в годах
 # Орбитальные параметры экзопланеты
 Orb_param_exo_array = np.array([
     1. ,  # большая полуось (а.е)
@@ -45,7 +47,8 @@ dynamics = Dynamics_SGLF(
     Orb_param_JSUN_array=Orb_param_JSUN_array,
     t0 = t0,
     t0_data=t0_data,
-    z0=z0)
+    z0=z0,
+    T_YEARS=T_YEARS, h_interp=h_interp, time_grid = time_grid)
 
 def Dynamics(dynamics, t):
     """
@@ -58,9 +61,6 @@ def Dynamics(dynamics, t):
     dr_sun_dt, d2r_sun_dt = dynamics.r_sun_deriv(t)
     S, a_vec= dynamics.basis_FCS(t)
     dS_dt, d2S_dt = dynamics.dS_dt(t)
-    print(S)
-    print(dS_dt)
-    exit()
     return S, dS_dt, d2S_dt, dr_sun_dt, d2r_sun_dt, a_vec
 
 
@@ -75,7 +75,6 @@ def dX_dt(t, X, dynamics):
     # print(np.linalg.norm(d2r_sun_dt_SSB) * 1.495978707e-4)
     # exit()
     
-
     D = (d2S_dt @ p_FCS) + 2 * (dS_dt @ dpdt_FCS)
     d2pdt2_FCS = -S.T @ d2r_sun_dt_SSB - S.T @ D
     return np.concatenate((dpdt_FCS, d2pdt2_FCS), axis=0)  
@@ -115,4 +114,5 @@ plt.legend()
 plt.grid()
 plt.title('Свободное движение аппарата в FCS за 20 лет')
 plt.show()
+
 
